@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 
 from railtrack.application.project_manager import ProjectManager
 from railtrack.domain.alignment import Alignment
+from railtrack.ui.dialogs.export_dialog import ExportDialog
+from railtrack.ui.dialogs.import_wizard import ImportWizard
 from railtrack.ui.views.plan_view import PlanView
 from railtrack.ui.views.profile_view import ProfileView
 from railtrack.ui.widgets.element_table import ElementTable
@@ -61,7 +63,12 @@ class MainWindow(QMainWindow):
         align_menu.addAction("Przelicz geometrię", self._recalculate, "F5")
         align_menu.addAction("Generuj przechyłki", self._generate_cant)
 
+        import_menu = mb.addMenu("&Import")
+        import_menu.addAction("Kreator importu...", self._open_import_wizard, "Ctrl+I")
+
         export_menu = mb.addMenu("&Eksport")
+        export_menu.addAction("Eksport z opcjami...", self._open_export_dialog, "Ctrl+E")
+        export_menu.addSeparator()
         export_menu.addAction("CSV...", self._export_csv)
         export_menu.addAction("XLSX...", self._export_xlsx)
         export_menu.addAction("DXF...", self._export_dxf)
@@ -105,6 +112,7 @@ class MainWindow(QMainWindow):
         # Element table
         self.element_table = ElementTable()
         self.element_table.element_changed.connect(self._on_element_changed)
+        self.element_table.element_selected.connect(self._on_element_selected_in_table)
         splitter.addWidget(self.element_table)
 
         splitter.setSizes([500, 200])
@@ -116,6 +124,9 @@ class MainWindow(QMainWindow):
         dock_valid = QDockWidget("Walidacja", self)
         dock_valid.setWidget(self.validation_panel)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_valid)
+
+        # Connect plan view element selection back to table
+        self.plan_view.element_clicked.connect(self._on_element_selected_in_view)
 
     def _setup_statusbar(self):
         self.statusBar().showMessage("Gotowy")
@@ -167,6 +178,52 @@ class MainWindow(QMainWindow):
         self._current_alignment = alignment
         self._refresh_all()
 
+    # ---- Import ----
+    def _open_import_wizard(self):
+        wizard = ImportWizard(self)
+        if wizard.exec() == ImportWizard.DialogCode.Accepted:
+            if wizard.imported_alignment:
+                al = wizard.imported_alignment
+                if self.pm.project is None:
+                    self.pm.new_project("Import")
+                self.pm.project.alignments.append(al)
+                self._current_alignment = al
+                self.pm.propagate_horizontal(al)
+                self._refresh_all()
+                self.statusBar().showMessage(f"Zaimportowano oś: {al.name}")
+            elif wizard.imported_points:
+                from railtrack.domain.alignment import SurveyPointSet
+                from railtrack.domain.primitives import Point3D
+                if self.pm.project is None:
+                    self.pm.new_project("Import")
+                sps = SurveyPointSet(name="Import", points=wizard.imported_points)
+                self.pm.project.survey_point_sets.append(sps)
+                self.statusBar().showMessage(f"Zaimportowano {len(wizard.imported_points)} punktów")
+
+    # ---- Export ----
+    def _open_export_dialog(self):
+        if not self._current_alignment:
+            QMessageBox.warning(self, "Brak osi", "Nie ma aktywnej osi do eksportu")
+            return
+        dlg = ExportDialog(self, alignment_name=self._current_alignment.name)
+        if dlg.exec() == ExportDialog.DialogCode.Accepted:
+            fmt = dlg.export_format
+            path = dlg.export_path
+            try:
+                if fmt == "csv":
+                    self.pm.export_csv(self._current_alignment, path)
+                elif fmt == "xlsx":
+                    self.pm.export_xlsx(self._current_alignment, path)
+                elif fmt == "dxf":
+                    self.pm.export_dxf(self._current_alignment, path)
+                elif fmt == "landxml":
+                    self.pm.export_landxml(path)
+                elif fmt == "html":
+                    self.pm.export_html_report(self._current_alignment, path)
+                self.statusBar().showMessage(f"Eksport {fmt.upper()}: {path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Błąd eksportu", str(e))
+
     # ---- Geometry ----
     def _recalculate(self):
         if self._current_alignment:
@@ -199,7 +256,7 @@ class MainWindow(QMainWindow):
             all_issues.extend(issues)
         self.validation_panel.set_issues(all_issues)
 
-    # ---- Export ----
+    # ---- Direct export shortcuts ----
     def _export_csv(self):
         if not self._current_alignment:
             return
@@ -237,6 +294,15 @@ class MainWindow(QMainWindow):
         if path:
             self.pm.export_html_report(self._current_alignment, path)
             self.statusBar().showMessage(f"Eksport HTML: {path}")
+
+    # ---- Element selection sync ----
+    def _on_element_selected_in_table(self, index: int):
+        """Highlight element in plan view when selected in table."""
+        self.plan_view.highlight_element(index)
+
+    def _on_element_selected_in_view(self, index: int):
+        """Select element in table when clicked in plan view."""
+        self.element_table.select_row(index)
 
     # ---- Callbacks ----
     def _on_alignment_selected(self, name: str):

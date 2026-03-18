@@ -24,6 +24,7 @@ from railtrack.domain.horizontal import (
     Straight,
     TransitionCurve,
 )
+from railtrack.domain.turnout import Turnout
 from railtrack.domain.validation_types import Severity, ValidationIssue
 from railtrack.domain.vertical import VerticalCurve, VerticalGrade
 from railtrack.geometry_engine.horizontal_engine import (
@@ -62,6 +63,12 @@ class AlignmentValidator:
             issues.extend(self._check_cant_geometry(alignment, speed, cat))
             issues.extend(self._check_vertical_geometry(alignment, cat))
         issues.extend(self._check_input_validity(alignment))
+        issues.extend(self._check_clothoid_parameters(alignment, cat))
+        issues.extend(self._check_vertical_chainage(alignment))
+        issues.extend(self._check_cant_chainage(alignment))
+        issues.extend(self._check_range_consistency(alignment))
+        issues.extend(self._check_cant_geometry_linkage(alignment))
+        issues.extend(self._check_turnout_context(alignment))
         return issues
 
     def _check_tangency(self, alignment: Alignment) -> list[ValidationIssue]:
@@ -322,4 +329,234 @@ class AlignmentValidator:
                     affected_object=alignment.name,
                     chainage=elem.start_chainage,
                 ))
+        return issues
+
+    def _check_clothoid_parameters(self, alignment: Alignment, cat) -> list[ValidationIssue]:
+        """Check clothoid (transition) minimum parameters: A_min and L_min."""
+        issues = []
+        if cat is None:
+            return issues
+        for i, elem in enumerate(alignment.horizontal_elements):
+            if isinstance(elem, TransitionCurve):
+                # Get the finite radius (the tighter end)
+                r_finite = elem.radius_end if math.isinf(elem.radius_start) else elem.radius_start
+                if math.isinf(r_finite):
+                    continue
+                # A_min = 0.021 * V^3 / R (simplified ST-T1-A6 formula for comfort)
+                # Minimum clothoid parameter
+                v = cat.max_speed
+                a_actual = elem.clothoid_parameter_A
+                a_min = max(0.021 * v, math.sqrt(r_finite * cat.min_transition_length))
+                if a_actual < a_min * 0.95:  # 5% tolerance
+                    issues.append(ValidationIssue(
+                        severity=Severity.WARNING,
+                        code="H-CLOTH-PARAM",
+                        title="Clothoid parameter A too small",
+                        message=f"Transition {i}: A={a_actual:.1f} < A_min={a_min:.1f}",
+                        affected_object=alignment.name,
+                        chainage=elem.start_chainage,
+                        chainage_end=elem.end_chainage,
+                        expected_value=f">= {a_min:.1f}",
+                        actual_value=f"{a_actual:.1f}",
+                        rule_reference="ST-T1-A6 clothoid parameter",
+                        suggestion=f"Increase transition length or adjust radius",
+                    ))
+        return issues
+
+    def _check_vertical_chainage(self, alignment: Alignment) -> list[ValidationIssue]:
+        """Check vertical element chainage continuity."""
+        issues = []
+        velems = alignment.vertical_elements
+        for i in range(len(velems) - 1):
+            gap = velems[i + 1].start_chainage - velems[i].end_chainage
+            if abs(gap) > 1e-6:
+                issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    code="V-CH-GAP",
+                    title="Vertical chainage discontinuity",
+                    message=f"Gap of {gap:.4f} m between vertical elements {i} and {i+1}",
+                    affected_object=alignment.name,
+                    chainage=velems[i].end_chainage,
+                    actual_value=f"{gap:.4f} m",
+                    suggestion="Recalculate vertical geometry or fix element lengths",
+                ))
+        return issues
+
+    def _check_cant_chainage(self, alignment: Alignment) -> list[ValidationIssue]:
+        """Check cant element chainage continuity."""
+        issues = []
+        celems = alignment.cant_elements
+        for i in range(len(celems) - 1):
+            gap = celems[i + 1].start_chainage - celems[i].end_chainage
+            if abs(gap) > 1e-6:
+                issues.append(ValidationIssue(
+                    severity=Severity.ERROR,
+                    code="C-CH-GAP",
+                    title="Cant chainage discontinuity",
+                    message=f"Gap of {gap:.4f} m between cant elements {i} and {i+1}",
+                    affected_object=alignment.name,
+                    chainage=celems[i].end_chainage,
+                    actual_value=f"{gap:.4f} m",
+                    suggestion="Regenerate cant elements",
+                ))
+        return issues
+
+    def _check_range_consistency(self, alignment: Alignment) -> list[ValidationIssue]:
+        """Check that horizontal, vertical, and cant cover consistent chainage ranges."""
+        issues = []
+        if not alignment.horizontal_elements:
+            return issues
+
+        h_start = alignment.horizontal_elements[0].start_chainage
+        h_end = alignment.horizontal_elements[-1].end_chainage
+
+        if alignment.vertical_elements:
+            v_start = alignment.vertical_elements[0].start_chainage
+            v_end = alignment.vertical_elements[-1].end_chainage
+            if v_start > h_start + 1.0:
+                issues.append(ValidationIssue(
+                    severity=Severity.WARNING,
+                    code="RANGE-V-SHORT",
+                    title="Vertical profile starts after horizontal",
+                    message=f"Vertical starts at km {v_start:.3f}, horizontal at km {h_start:.3f}",
+                    affected_object=alignment.name,
+                    chainage=h_start,
+                    suggestion="Extend vertical profile to cover full horizontal range",
+                ))
+            if v_end < h_end - 1.0:
+                issues.append(ValidationIssue(
+                    severity=Severity.WARNING,
+                    code="RANGE-V-SHORT",
+                    title="Vertical profile ends before horizontal",
+                    message=f"Vertical ends at km {v_end:.3f}, horizontal at km {h_end:.3f}",
+                    affected_object=alignment.name,
+                    chainage=h_end,
+                    suggestion="Extend vertical profile to cover full horizontal range",
+                ))
+
+        if alignment.cant_elements:
+            c_start = alignment.cant_elements[0].start_chainage
+            c_end = alignment.cant_elements[-1].end_chainage
+            if c_start > h_start + 1.0:
+                issues.append(ValidationIssue(
+                    severity=Severity.WARNING,
+                    code="RANGE-C-SHORT",
+                    title="Cant profile starts after horizontal",
+                    message=f"Cant starts at km {c_start:.3f}, horizontal at km {h_start:.3f}",
+                    affected_object=alignment.name,
+                    chainage=h_start,
+                    suggestion="Regenerate cant elements",
+                ))
+            if c_end < h_end - 1.0:
+                issues.append(ValidationIssue(
+                    severity=Severity.WARNING,
+                    code="RANGE-C-SHORT",
+                    title="Cant profile ends before horizontal",
+                    message=f"Cant ends at km {c_end:.3f}, horizontal at km {h_end:.3f}",
+                    affected_object=alignment.name,
+                    chainage=h_end,
+                    suggestion="Regenerate cant elements",
+                ))
+
+        return issues
+
+    def _check_cant_geometry_linkage(self, alignment: Alignment) -> list[ValidationIssue]:
+        """Check that cant ramps align with transition curves and cant segments with arcs."""
+        issues = []
+        if not alignment.cant_elements or not alignment.horizontal_elements:
+            return issues
+
+        for c_elem in alignment.cant_elements:
+            ch_mid = c_elem.start_chainage + (c_elem.end_chainage - c_elem.start_chainage) / 2.0
+            # Find corresponding horizontal element
+            h_elem = None
+            for he in alignment.horizontal_elements:
+                if he.chainage_range.contains(ch_mid):
+                    h_elem = he
+                    break
+            if h_elem is None:
+                continue
+
+            if isinstance(c_elem, CantRamp) and isinstance(h_elem, Straight):
+                # Cant ramp on a straight is suspicious (unless near transition)
+                if abs(c_elem.cant_start) > 0.001 or abs(c_elem.cant_end) > 0.001:
+                    issues.append(ValidationIssue(
+                        severity=Severity.WARNING,
+                        code="C-ALIGN-RAMP",
+                        title="Cant ramp on straight section",
+                        message=f"Non-zero cant ramp ({c_elem.cant_start*1000:.0f} → {c_elem.cant_end*1000:.0f} mm) on straight",
+                        affected_object=alignment.name,
+                        chainage=c_elem.start_chainage,
+                        chainage_end=c_elem.end_chainage,
+                        suggestion="Verify cant alignment matches horizontal geometry",
+                    ))
+
+            if isinstance(c_elem, CantSegment) and c_elem.cant > 0.001:
+                if isinstance(h_elem, Straight):
+                    issues.append(ValidationIssue(
+                        severity=Severity.ERROR,
+                        code="C-ALIGN-CANT",
+                        title="Non-zero cant on straight section",
+                        message=f"Cant {c_elem.cant*1000:.0f} mm applied on straight section",
+                        affected_object=alignment.name,
+                        chainage=c_elem.start_chainage,
+                        chainage_end=c_elem.end_chainage,
+                        suggestion="Cant should be zero on straight sections",
+                    ))
+
+        return issues
+
+    def _check_turnout_context(self, alignment: Alignment) -> list[ValidationIssue]:
+        """Check turnout placement rules."""
+        issues = []
+        if not alignment.turnouts:
+            return issues
+
+        tr = self.rules.turnout_rules
+        for turnout in alignment.turnouts:
+            # Check tangent before turnout
+            min_before = tr.min_tangent_before_turnout
+            min_after = tr.min_tangent_after_turnout
+
+            for he in alignment.horizontal_elements:
+                if he.chainage_range.contains(turnout.chainage):
+                    if not isinstance(he, Straight):
+                        issues.append(ValidationIssue(
+                            severity=Severity.ERROR,
+                            code="T-NOT-STRAIGHT",
+                            title="Turnout not on straight section",
+                            message=f"Turnout '{turnout.name}' at km {turnout.chainage:.3f} is not on a straight",
+                            affected_object=alignment.name,
+                            chainage=turnout.chainage,
+                            suggestion="Move turnout to a straight section",
+                        ))
+                    elif isinstance(he, Straight):
+                        dist_from_start = turnout.chainage - he.start_chainage
+                        dist_to_end = he.end_chainage - turnout.end_chainage
+                        if dist_from_start < min_before:
+                            issues.append(ValidationIssue(
+                                severity=Severity.WARNING,
+                                code="T-TANG-BEFORE",
+                                title="Insufficient tangent before turnout",
+                                message=f"Only {dist_from_start:.1f} m tangent before turnout '{turnout.name}' (min {min_before:.1f} m)",
+                                affected_object=alignment.name,
+                                chainage=turnout.chainage,
+                                expected_value=f">= {min_before:.1f} m",
+                                actual_value=f"{dist_from_start:.1f} m",
+                                rule_reference="ST-T1-A6 turnout rules",
+                            ))
+                        if dist_to_end < min_after:
+                            issues.append(ValidationIssue(
+                                severity=Severity.WARNING,
+                                code="T-TANG-AFTER",
+                                title="Insufficient tangent after turnout",
+                                message=f"Only {dist_to_end:.1f} m tangent after turnout '{turnout.name}' (min {min_after:.1f} m)",
+                                affected_object=alignment.name,
+                                chainage=turnout.end_chainage,
+                                expected_value=f">= {min_after:.1f} m",
+                                actual_value=f"{dist_to_end:.1f} m",
+                                rule_reference="ST-T1-A6 turnout rules",
+                            ))
+                    break
+
         return issues

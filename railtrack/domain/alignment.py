@@ -63,6 +63,38 @@ class ClearanceConstraint:
 
 
 @dataclass
+class ExistingTrackGeometry:
+    """Represents existing (surveyed or imported) track geometry for comparison.
+
+    Stores a polyline of measured points along an existing track centerline.
+    Used for comparison with designed geometry or as a basis for reconstruction.
+    """
+    name: str
+    points: list[Point3D] = field(default_factory=list)
+    description: str = ""
+    source_file: str = ""
+
+    @property
+    def start_chainage(self) -> float:
+        return 0.0
+
+    @property
+    def end_chainage(self) -> float:
+        if len(self.points) < 2:
+            return 0.0
+        total = 0.0
+        for i in range(1, len(self.points)):
+            p0 = self.points[i - 1]
+            p1 = self.points[i]
+            total += p0.to_2d().distance_to(p1.to_2d())
+        return total
+
+    @property
+    def length(self) -> float:
+        return self.end_chainage
+
+
+@dataclass
 class Alignment:
     """Complete track alignment combining horizontal, vertical, and cant."""
     name: str

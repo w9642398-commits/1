@@ -29,6 +29,7 @@ from railtrack.domain.primitives import Point2D
 
 class ElementTable(QWidget):
     element_changed = Signal()
+    element_selected = Signal(int)  # emitted with element index when row is selected
 
     COLUMNS = [
         "Typ", "Km pocz.", "Km końc.", "Długość",
@@ -61,6 +62,7 @@ class ElementTable(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.table)
 
         self._alignment: Alignment | None = None
@@ -152,3 +154,15 @@ class ElementTable(QWidget):
                 self._alignment.horizontal_elements.pop(row)
         self._refresh()
         self.element_changed.emit()
+
+    def _on_selection_changed(self):
+        rows = set(idx.row() for idx in self.table.selectedIndexes())
+        if len(rows) == 1:
+            self.element_selected.emit(next(iter(rows)))
+
+    def select_row(self, index: int):
+        """Programmatically select a row (e.g. from plan view click)."""
+        if 0 <= index < self.table.rowCount():
+            self.table.blockSignals(True)
+            self.table.selectRow(index)
+            self.table.blockSignals(False)

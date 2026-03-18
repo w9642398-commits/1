@@ -25,11 +25,46 @@ from railtrack.domain.horizontal import (
 )
 
 
+def applied_cant_ratio_for_speed(speed_kmh: float) -> float:
+    """Speed-dependent applied cant ratio.
+
+    Lower speeds allow higher ratio (closer to equilibrium),
+    higher speeds require lower ratio for passenger comfort.
+    """
+    if speed_kmh <= 80:
+        return 0.75
+    elif speed_kmh <= 120:
+        return 0.70
+    elif speed_kmh <= 160:
+        return 0.67
+    elif speed_kmh <= 200:
+        return 0.60
+    else:
+        return 0.55
+
+
+def compute_cant_deficiency_at(
+    speed_kmh: float,
+    radius: float,
+    applied_cant: float,
+    gauge: float = 1.435,
+) -> float:
+    """Calculate cant deficiency at a specific point.
+
+    Returns: cant deficiency in metres (positive = under-canted).
+    """
+    if math.isinf(radius) or radius <= 0:
+        return 0.0
+    eq = equilibrium_cant(speed_kmh, radius, gauge)
+    return cant_deficiency(applied_cant, eq)
+
+
 def generate_cant_elements(
     horizontal_elements: list[HorizontalElementUnion],
     design_speed_kmh: float,
-    applied_cant_ratio: float = 0.67,
+    applied_cant_ratio: float | None = None,
     gauge: float = 1.435,
+    max_cant: float = 0.160,
 ) -> list[CantElementUnion]:
     """Generate cant elements from horizontal alignment.
 
@@ -38,9 +73,19 @@ def generate_cant_elements(
     - Circular arc → constant cant (fraction of equilibrium cant)
     - Transition curve → cant ramp from entry to exit cant
 
-    applied_cant_ratio: fraction of equilibrium cant to apply (typically 2/3).
+    If applied_cant_ratio is None, a speed-dependent ratio is used.
+    Applied cant is clamped to max_cant.
     """
+    if applied_cant_ratio is None:
+        applied_cant_ratio = applied_cant_ratio_for_speed(design_speed_kmh)
+
     cant_elements: list[CantElementUnion] = []
+
+    def _applied_cant(radius: float) -> float:
+        if math.isinf(radius) or radius <= 0:
+            return 0.0
+        eq = equilibrium_cant(design_speed_kmh, radius, gauge)
+        return min(eq * applied_cant_ratio, max_cant)
 
     for elem in horizontal_elements:
         if isinstance(elem, Straight):
@@ -51,33 +96,18 @@ def generate_cant_elements(
                 gauge=gauge,
             ))
         elif isinstance(elem, CircularArc):
-            eq_cant = equilibrium_cant(design_speed_kmh, elem.radius, gauge)
-            applied = eq_cant * applied_cant_ratio
             cant_elements.append(CantSegment(
                 start_chainage=elem.start_chainage,
                 length=elem.length,
-                cant=applied,
+                cant=_applied_cant(elem.radius),
                 gauge=gauge,
             ))
         elif isinstance(elem, TransitionCurve):
-            r_start = elem.radius_start
-            r_end = elem.radius_end
-
-            if math.isinf(r_start):
-                cant_start = 0.0
-            else:
-                cant_start = equilibrium_cant(design_speed_kmh, r_start, gauge) * applied_cant_ratio
-
-            if math.isinf(r_end):
-                cant_end = 0.0
-            else:
-                cant_end = equilibrium_cant(design_speed_kmh, r_end, gauge) * applied_cant_ratio
-
             cant_elements.append(CantRamp(
                 start_chainage=elem.start_chainage,
                 length=elem.length,
-                cant_start=cant_start,
-                cant_end=cant_end,
+                cant_start=_applied_cant(elem.radius_start),
+                cant_end=_applied_cant(elem.radius_end),
                 gauge=gauge,
             ))
 
