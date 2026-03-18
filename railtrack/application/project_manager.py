@@ -27,7 +27,7 @@ from railtrack.exporters.html_report import export_validation_html
 from railtrack.exporters.landxml_exporter import export_landxml
 from railtrack.exporters.xlsx_exporter import export_alignment_xlsx
 from railtrack.geometry_engine.cant_engine import generate_cant_elements
-from railtrack.geometry_engine.horizontal_engine import propagate_geometry
+from railtrack.geometry_engine.horizontal_engine import minimize_elements, propagate_geometry
 from railtrack.geometry_engine.vertical_engine import propagate_vertical
 from railtrack.validation.validator import AlignmentValidator
 
@@ -76,6 +76,25 @@ class ProjectManager:
         alignment.cant_elements = generate_cant_elements(
             alignment.horizontal_elements, speed
         )
+
+    def minimize_elements(self, alignment: Alignment) -> None:
+        """Merge adjacent compatible elements to reduce element count."""
+        alignment.horizontal_elements = minimize_elements(
+            alignment.horizontal_elements
+        )
+
+    def import_existing_geometry(
+        self,
+        points: list[Point3D] | list[Point2D],
+        name: str = "Imported",
+    ) -> Alignment:
+        """Import existing track geometry from surveyed points."""
+        from railtrack.importers.existing_geometry_importer import import_existing_geometry
+        alignment = import_existing_geometry(points, name)
+        if self.project is None:
+            self.new_project("Import")
+        self.project.alignments.append(alignment)
+        return alignment
 
     def validate_alignment(self, alignment: Alignment) -> list[ValidationIssue]:
         criteria = self.project.design_criteria if self.project else None

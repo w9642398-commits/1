@@ -153,6 +153,100 @@ def compute_points_along(
     return points
 
 
+def minimize_elements(
+    elements: list[HorizontalElementUnion],
+    position_tolerance: float = 1e-3,
+    azimuth_tolerance: float = 1e-4,
+    radius_tolerance: float = 0.1,
+) -> list[HorizontalElementUnion]:
+    """Minimize the number of elements by merging adjacent compatible ones.
+
+    Merges:
+    - Adjacent straights with same azimuth → single longer straight
+    - Adjacent circular arcs with same radius and direction → single longer arc
+    - Zero-length elements → removed
+
+    Preserves tangency. Does NOT merge transition curves (clothoids), as their
+    curvature function depends on position within the element.
+
+    Returns a new propagated element list.
+    """
+    if len(elements) <= 1:
+        return list(elements)
+
+    merged: list[HorizontalElementUnion] = []
+    i = 0
+
+    while i < len(elements):
+        elem = elements[i]
+
+        # Skip zero-length elements
+        if elem.length < 1e-9:
+            i += 1
+            continue
+
+        # Try to merge with subsequent elements
+        if isinstance(elem, Straight):
+            combined_length = elem.length
+            j = i + 1
+            while j < len(elements):
+                nxt = elements[j]
+                if not isinstance(nxt, Straight):
+                    break
+                if nxt.length < 1e-9:
+                    j += 1
+                    continue
+                # Check azimuth compatibility
+                az_diff = abs(normalize_angle(elem.start_azimuth) - normalize_angle(nxt.start_azimuth))
+                az_gap = min(az_diff, 2 * math.pi - az_diff)
+                if az_gap > azimuth_tolerance:
+                    break
+                combined_length += nxt.length
+                j += 1
+            merged.append(Straight(
+                start_chainage=elem.start_chainage,
+                length=combined_length,
+                start_point=elem.start_point,
+                start_azimuth=elem.start_azimuth,
+            ))
+            i = j
+
+        elif isinstance(elem, CircularArc):
+            combined_length = elem.length
+            j = i + 1
+            while j < len(elements):
+                nxt = elements[j]
+                if not isinstance(nxt, CircularArc):
+                    break
+                if nxt.length < 1e-9:
+                    j += 1
+                    continue
+                # Check radius and direction compatibility
+                if nxt.direction != elem.direction:
+                    break
+                if abs(nxt.radius - elem.radius) > radius_tolerance:
+                    break
+                combined_length += nxt.length
+                j += 1
+            merged.append(CircularArc(
+                start_chainage=elem.start_chainage,
+                length=combined_length,
+                start_point=elem.start_point,
+                start_azimuth=elem.start_azimuth,
+                radius=elem.radius,
+                direction=elem.direction,
+            ))
+            i = j
+
+        else:
+            # Transition curves - cannot merge
+            merged.append(elem)
+            i += 1
+
+    # Re-propagate to fix chainage and coordinates
+    return propagate_geometry(merged)
+
+
 def build_straight_curve_straight(
     start_point: Point2D,
     start_azimuth: float,

@@ -56,6 +56,7 @@ class ImportWizard(QDialog):
             "XLSX - Elementy geometrii",
             "XLSX - Punkty pomiarowe",
             "LandXML 1.2",
+            "CSV/TXT - Rekonstrukcja geometrii z punktów",
         ])
         self.format_combo.currentIndexChanged.connect(self._on_format_changed)
         format_layout.addWidget(self.format_combo)
@@ -133,7 +134,7 @@ class ImportWizard(QDialog):
         self._on_format_changed(0)
 
     def _on_format_changed(self, idx: int):
-        if idx in (0, 1):  # CSV
+        if idx in (0, 1, 5):  # CSV (including geometry reconstruction)
             self.options_stack.setCurrentIndex(0)
         elif idx in (2, 3):  # XLSX
             self.options_stack.setCurrentIndex(1)
@@ -142,7 +143,7 @@ class ImportWizard(QDialog):
 
     def _browse_file(self):
         idx = self.format_combo.currentIndex()
-        if idx in (0, 1):
+        if idx in (0, 1, 5):
             filt = "CSV/TXT (*.csv *.txt);;Wszystkie (*)"
         elif idx in (2, 3):
             filt = "Excel (*.xlsx *.xls);;Wszystkie (*)"
@@ -240,6 +241,20 @@ class ImportWizard(QDialog):
                 else:
                     QMessageBox.warning(self, "Brak danych", "Plik nie zawiera geometrii osi")
                     return
+            elif idx == 5:  # CSV geometry reconstruction from points
+                from railtrack.importers.existing_geometry_importer import import_existing_geometry
+                pts = import_survey_points(
+                    path, delimiter=self._get_delimiter(),
+                    skip_header=self.csv_skip_header.isChecked(),
+                    x_col=self.csv_x_col.value(),
+                    y_col=self.csv_y_col.value(),
+                    z_col=self.csv_z_col.value(),
+                )
+                if len(pts) < 3:
+                    QMessageBox.warning(self, "Za mało punktów", "Potrzeba minimum 3 punktów do rekonstrukcji")
+                    return
+                al = import_existing_geometry(pts, name=Path(path).stem)
+                self._imported_alignment = al
 
             self.accept()
         except Exception as e:

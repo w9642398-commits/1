@@ -62,6 +62,9 @@ class MainWindow(QMainWindow):
         align_menu.addAction("Dodaj oś", self._add_alignment)
         align_menu.addAction("Przelicz geometrię", self._recalculate, "F5")
         align_menu.addAction("Generuj przechyłki", self._generate_cant)
+        align_menu.addAction("Minimalizuj elementy", self._minimize_elements)
+        align_menu.addSeparator()
+        align_menu.addAction("Wstaw rozjazd z katalogu...", self._insert_turnout_from_catalog)
 
         import_menu = mb.addMenu("&Import")
         import_menu.addAction("Kreator importu...", self._open_import_wizard, "Ctrl+I")
@@ -177,6 +180,30 @@ class MainWindow(QMainWindow):
         alignment = self.pm.add_alignment(f"Oś {n}")
         self._current_alignment = alignment
         self._refresh_all()
+
+    # ---- Element operations ----
+    def _minimize_elements(self):
+        if self._current_alignment:
+            before = len(self._current_alignment.horizontal_elements)
+            self.pm.minimize_elements(self._current_alignment)
+            after = len(self._current_alignment.horizontal_elements)
+            self._refresh_views()
+            self.statusBar().showMessage(
+                f"Minimalizacja: {before} → {after} elementów"
+            )
+
+    def _insert_turnout_from_catalog(self):
+        if not self._current_alignment:
+            QMessageBox.warning(self, "Brak osi", "Nie ma aktywnej osi")
+            return
+        from railtrack.ui.dialogs.turnout_dialog import TurnoutCatalogDialog
+        dlg = TurnoutCatalogDialog(self)
+        if dlg.exec() == TurnoutCatalogDialog.DialogCode.Accepted and dlg.created_turnout:
+            self._current_alignment.turnouts.append(dlg.created_turnout)
+            self._refresh_all()
+            self.statusBar().showMessage(
+                f"Wstawiono rozjazd: {dlg.created_turnout.name}"
+            )
 
     # ---- Import ----
     def _open_import_wizard(self):
