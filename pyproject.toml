@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "railtrack"
+version = "0.1.0"
+description = "Railway track geometry design system"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "PySide6>=6.5",
+    "pyqtgraph>=0.13",
+    "ezdxf>=0.18",
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "lxml>=4.9",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-qt>=4.2",
+]
+
+[project.scripts]
+railtrack = "railtrack.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["railtrack/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.setuptools.packages.find]
+include = ["railtrack*"]

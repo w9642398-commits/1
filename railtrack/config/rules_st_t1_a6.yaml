@@ -1,0 +1,90 @@
+# ST-T1-A6 Design Rules Configuration
+# Values are configurable - update without code changes
+# This file contains representative rule parameters.
+# Actual values should be verified against the current edition of the instruction.
+
+metadata:
+  standard: "ST-T1-A6"
+  description: "Instrukcja o warunkach technicznych dla linii kolejowych"
+  version: "configurable"
+
+speed_categories:
+  - name: "V_max <= 40"
+    max_speed: 40
+    min_radius: 150
+    min_transition_length: 20
+    max_cant: 0.160
+    max_cant_deficiency: 0.100
+    max_gradient: 0.040
+    min_vertical_curve_radius: 2000
+    min_tangent_between_curves: 15
+
+  - name: "40 < V_max <= 80"
+    max_speed: 80
+    min_radius: 300
+    min_transition_length: 30
+    max_cant: 0.160
+    max_cant_deficiency: 0.100
+    max_gradient: 0.025
+    min_vertical_curve_radius: 3000
+    min_tangent_between_curves: 20
+
+  - name: "80 < V_max <= 120"
+    max_speed: 120
+    min_radius: 500
+    min_transition_length: 40
+    max_cant: 0.160
+    max_cant_deficiency: 0.100
+    max_gradient: 0.012
+    min_vertical_curve_radius: 5000
+    min_tangent_between_curves: 30
+
+  - name: "120 < V_max <= 160"
+    max_speed: 160
+    min_radius: 800
+    min_transition_length: 50
+    max_cant: 0.160
+    max_cant_deficiency: 0.090
+    min_vertical_curve_radius: 8000
+    max_gradient: 0.010
+    min_tangent_between_curves: 40
+
+  - name: "160 < V_max <= 200"
+    max_speed: 200
+    min_radius: 1500
+    min_transition_length: 60
+    max_cant: 0.160
+    max_cant_deficiency: 0.080
+    max_gradient: 0.010
+    min_vertical_curve_radius: 12000
+    min_tangent_between_curves: 50
+
+  - name: "200 < V_max <= 250"
+    max_speed: 250
+    min_radius: 2500
+    min_transition_length: 80
+    max_cant: 0.160
+    max_cant_deficiency: 0.070
+    max_gradient: 0.010
+    min_vertical_curve_radius: 16000
+    min_tangent_between_curves: 60
+
+global_rules:
+  max_cant: 0.160
+  track_gauge: 1.435
+  gravity: 9.81
+
+  # Cant ramp gradient limits (1:n where n is the denominator)
+  min_cant_ramp_ratio_normal: 600    # 1:600 for normal lines
+  min_cant_ramp_ratio_high_speed: 800  # 1:800 for high-speed
+
+  # Maximum rate of change of cant deficiency
+  max_dD_dt: 0.055  # m/s (55 mm/s)
+
+  # Minimum transition curve length formula parameters
+  # L_min = max(D * n_ramp, V * D / (max_dD_dt * 3.6 * 1000))
+  # where D = cant in mm, n_ramp = ramp ratio
+
+turnout_rules:
+  min_tangent_before_turnout: 10.0
+  min_tangent_after_turnout: 10.0

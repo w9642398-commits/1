@@ -1,0 +1,6 @@
+type,start_chainage,length,start_x,start_y,start_azimuth_deg,radius,direction,radius_start,radius_end
+straight,0,200,1000,2000,0,,,,,
+transition,200,60,1000,2200,0,,right,inf,500
+arc,260,300,0,0,0,500,right,,
+transition,560,60,0,0,0,,right,500,inf
+straight,620,200,0,0,0,,,,,
