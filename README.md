@@ -231,6 +231,8 @@ CivilAI.sln
 3. Zbuduj `Release | Any CPU`.
 4. Skopiuj `CivilAI.Plugin.dll` do katalogu deploymentowego lub bezpośrednio `NETLOAD` w Civil 3D.
 
+Dodatkowo, bez uruchamiania .NET, możesz wykonać statyczną walidację całego rozwiązania poleceniem `python tests/validate_civilai_static.py`.
+
 ### Deploy do Civil 3D 2026
 
 #### Opcja 1 — ręcznie
