@@ -1,123 +1,319 @@
-# RailTrack - Railway Track Geometry Design System
+# CivilAI for Autodesk Civil 3D 2026
 
-Production-grade MVP for designing railway track geometry with validation against ST-T1-A6 rules.
+Produkcyjna architektura i implementacja dodatku AI dla Autodesk Civil 3D 2026 / AutoCAD 2026, dostępnego jako własna karta Ribbon oraz dockowalna paleta robocza. Rozwiązanie nie pozwala modelowi bezpośrednio modyfikować DWG: model generuje wyłącznie plan i wywołania do kontrolowanego katalogu lokalnych narzędzi.
 
-## Features
+---
 
-### Geometry Engine
-- **Horizontal alignment**: Straights, circular arcs, clothoid transition curves
-- **Vertical profile**: Constant grades, parabolic vertical curves
-- **Cant (superelevation)**: Automatic generation, linear ramps, equilibrium/deficiency calculations
-- **Tangency enforcement**: Automatic propagation ensuring geometric continuity
-- **S-T-C-T-S builder**: Standard straight-transition-curve-transition-straight pattern
+## ETAP 1 — Architektura, założenia, drzewo projektu, lista narzędzi
 
-### Validation (ST-T1-A6 Rule Engine)
-- Configurable rules in YAML (no code changes needed to update limits)
-- Speed-category-based checks (40-250 km/h)
-- Checks: tangency breaks, radius limits, transition lengths, cant limits, gradient limits, element sequence, chainage continuity
-- Detailed issue reports with severity, code, expected/actual values, and suggestions
+### Cele architektoniczne
 
-### Import/Export
-- **CSV/TXT**: Survey points, horizontal elements with column mapping
-- **XLSX**: Full alignment data import/export
-- **DXF**: True geometric export (LINE for straights, ARC for arcs, polyline for clothoids)
-- **LandXML 1.2**: Standard exchange format with Line/Curve/Spiral elements
-- **HTML**: Validation report with color-coded issue table
+- **Natywny host Civil 3D 2026**: biblioteka .NET ładowana przez `NETLOAD`, z bootstrapem `IExtensionApplication`, własną kartą Ribbon i `PaletteSet`.
+- **Bezpieczny AI orchestration**: OpenAI Responses API odpowiada wyłącznie za planowanie; lokalny executor wykonuje operacje CAD/Civil 3D w transakcji.
+- **Warstwowość i testowalność**: separacja hosta Autodesk od logiki planowania, walidacji, modeli i testów jednostkowych.
+- **MVVM UI**: dockowalny panel z promptem, planem, historią, listą narzędzi, walidacją i raportem wykonania.
+- **Production-ready operability**: logowanie JSONL, ustawienia per-user, DPAPI dla klucza API, tryb dry-run, pojedynczy undo scope i raport po wykonaniu.
 
-### Desktop UI (PySide6)
-- Project tree with alignment hierarchy
-- Element table with add/remove controls
-- Interactive plan view (pyqtgraph) with color-coded element types
-- Vertical profile + cant diagram
-- Validation panel with sortable issue list
-- Properties panel showing alignment info and design criteria
-- Full menu: project management, export, validation
+### Założenia implementacyjne
 
-## Quick Start
+1. **Host pluginu** targetuje `net8.0-windows` z WPF i wymaga lokalnej instalacji Civil 3D 2026 / AutoCAD 2026 SDK DLL (`AcMgd`, `AcDbMgd`, `AeccDbMgd`, `AdWindows`).
+2. **Core** jest niezależny od Autodesk API i może być testowany bez Civil 3D.
+3. **Responses API** jest obsługiwane przez `HttpClient`, z przygotowaną ścieżką na odpowiedzi synchroniczne i SSE streaming.
+4. **Structured outputs** są wymuszane przez ścisły JSON schema planu (`civil_ai_operation_plan`).
+5. **Tool registry** opisuje wszystkie narzędzia JSON schema + semantykę bezpieczeństwa; model może użyć tylko tych narzędzi.
+6. **Pełne sterowanie Civil 3D** jest realizowane dwiema drogami: przez bezpieczne managed wrappers tam, gdzie API jest stabilne, oraz przez kontrolowany native command bridge dla funkcji dostępnych tylko jako komendy Civil 3D/AutoCAD.
+7. **Operacje destrukcyjne** są oznaczone jako confirmation-gated. `EraseEntity` nigdy nie wykonuje się bez jawnej zgody lub polityki auto-execute.
+8. **Nieobsługiwane workflow** nie są halucynowane: executor zwraca jawny błąd + alternatywny workflow, jeśli API/template workflow wymaga dodatkowej konfiguracji.
+9. **Native command bridge** może kolejkować katalogowane lub jawnie dopuszczone makra Civil 3D, dzięki czemu system może sterować także funkcjami spoza bezpośrednich wrapperów .NET.
 
-```bash
-# Install dependencies
-pip install numpy scipy PySide6 pyqtgraph ezdxf pandas openpyxl lxml pyyaml jinja2
+### Warstwy rozwiązania
 
-# Run the desktop application
-python -m railtrack
+- **CivilAI.Plugin**
+  - bootstrap hosta AutoCAD/Civil 3D,
+  - Ribbon (`AI Civil`),
+  - `PaletteSet` z panelem WPF,
+  - adaptery Autodesk API,
+  - ustawienia i magazyn sekretów.
+- **CivilAI.Core**
+  - modele domenowe planu i wykonania,
+  - klient OpenAI Responses API,
+  - parser structured output,
+  - walidacja bezpieczeństwa,
+  - orkiestrator AI,
+  - rejestr narzędzi.
+- **CivilAI.Tests**
+  - testy parsera planu,
+  - testy walidacji bezpieczeństwa,
+  - testy katalogu narzędzi,
+  - scenariusze end-to-end dry-run.
 
-# Run sample project (generates all export formats)
-python examples/create_sample_project.py
+### Pipeline wykonania
 
-# Run tests
-python -m pytest railtrack/tests/ -v
+1. UI zbiera prompt i tryb (`DryRun` / `Execute`).
+2. `ICadContextProvider` buduje zwięzły snapshot rysunku: dokument, jednostki, warstwy, selection, viewport, widoczne encje, obiekty Civil 3D.
+3. `AssistantOrchestrator` buduje request do OpenAI Responses API z:
+   - promptem użytkownika,
+   - snapshotem technicznym,
+   - listą dostępnych tools,
+   - regułami bezpieczeństwa,
+   - JSON schema planu.
+4. Model zwraca **strict JSON plan**.
+5. `PlanParser` materializuje plan, a `PlanValidator` odrzuca nieznane narzędzia, błędne JSON-y, niespójności bezpieczeństwa i niedozwolone mutacje.
+6. UI prezentuje plan, kroki, walidację i listę potencjalnych zmian.
+7. `ICadToolExecutor` wykonuje wyłącznie zatwierdzone kroki, transakcyjnie i z jednym logicznym undo scope.
+8. Po wykonaniu powstaje `ExecutionReport` z logiem, listą zmodyfikowanych obiektów i walidacją post-execution.
+
+### Drzewo projektu
+
+```text
+CivilAI.sln
+├── src/
+│   ├── CivilAI.Core/
+│   │   ├── Contracts/
+│   │   ├── Models/
+│   │   ├── OpenAI/
+│   │   ├── Planning/
+│   │   ├── Runtime/
+│   │   ├── Safety/
+│   │   ├── Telemetry/
+│   │   ├── Tools/
+│   │   ├── Utilities/
+│   │   └── CivilAI.Core.csproj
+│   └── CivilAI.Plugin/
+│       ├── Commands/
+│       ├── Composition/
+│       ├── Host/
+│       ├── Ribbon/
+│       ├── Services/
+│       ├── UI/
+│       │   ├── Controls/
+│       │   ├── ViewModels/
+│       │   └── Windows/
+│       └── CivilAI.Plugin.csproj
+├── tests/
+│   └── CivilAI.Tests/
+│       ├── EndToEndScenarioTests.cs
+│       ├── PlanParserTests.cs
+│       ├── PlanValidatorTests.cs
+│       ├── ToolRegistryTests.cs
+│       └── CivilAI.Tests.csproj
+└── README.md
 ```
 
-## Project Structure
+### Lista lokalnych narzędzi (tool registry)
 
-```
-railtrack/
-├── domain/                  # Domain model
-│   ├── primitives.py        # Point2D, Point3D, ChainageRange
-│   ├── horizontal.py        # Straight, CircularArc, TransitionCurve
-│   ├── vertical.py          # VerticalGrade, VerticalCurve
-│   ├── cant.py              # CantSegment, CantRamp, equilibrium_cant
-│   ├── turnout.py           # Turnout data model
-│   ├── alignment.py         # Alignment, Project, DesignCriteria
-│   └── validation_types.py  # ValidationIssue, Severity
-├── geometry_engine/         # Computation engine
-│   ├── horizontal_engine.py # Propagation, tangency, SCS builder
-│   ├── vertical_engine.py   # Vertical propagation, profiles
-│   └── cant_engine.py       # Cant generation, profiles
-├── validation/              # Rule-based validation
-│   ├── rule_loader.py       # YAML rule loader
-│   └── validator.py         # AlignmentValidator with 10+ check types
-├── importers/               # Data import
-│   ├── csv_importer.py
-│   ├── xlsx_importer.py
-│   └── landxml_importer.py
-├── exporters/               # Data export
-│   ├── csv_exporter.py
-│   ├── xlsx_exporter.py
-│   ├── dxf_exporter.py
-│   ├── landxml_exporter.py
-│   └── html_report.py
-├── application/             # Application layer
-│   └── project_manager.py   # Project coordination, save/load
-├── config/                  # Configuration
-│   └── rules_st_t1_a6.yaml # ST-T1-A6 design rules
-├── ui/                      # PySide6 desktop UI
-│   ├── main_window.py
-│   ├── widgets/
-│   │   ├── element_table.py
-│   │   ├── project_tree.py
-│   │   ├── properties_panel.py
-│   │   └── validation_panel.py
-│   └── views/
-│       ├── plan_view.py
-│       └── profile_view.py
-└── tests/                   # Test suite (58 tests)
-    ├── unit/
-    │   ├── test_primitives.py
-    │   ├── test_horizontal.py
-    │   ├── test_vertical.py
-    │   ├── test_cant.py
-    │   └── test_validation.py
-    └── integration/
-        └── test_export_import.py
-```
+#### AutoCAD / host tools
+- `GetActiveDocumentContext`
+- `GetCurrentSelection`
+- `GetVisibleEntities`
+- `QueryEntitiesByType`
+- `QueryEntitiesByLayer`
+- `QueryCivilObjects`
+- `CreateLine`
+- `CreatePolyline`
+- `CreateArc`
+- `CreateCircle`
+- `CreateText`
+- `CreateMText`
+- `CreateBlockReference`
+- `MoveEntity`
+- `CopyEntity`
+- `RotateEntity`
+- `EraseEntity`
+- `ChangeLayer`
+- `SetProperties`
+- `ZoomToObjects`
+- `StartUndoScope`
+- `CommitTransaction`
+- `RollbackTransaction`
 
-## Architecture Decisions
+#### Civil 3D tools
+- `CreateAlignmentFromPolyline`
+- `CreateProfile`
+- `CreateFeatureLine`
+- `CreateSurfaceTin`
+- `AddLabelsToAlignment`
+- `AddLabelsToProfile`
+- `QueryAlignmentGeometry`
+- `QuerySurfaceInfo`
+- `QueryProfileInfo`
+- `QueryParcelInfo`
+- `QueryPointGroups`
+- `CreateOffsetAlignmentIfSupportedByWorkflow`
+- `ExtractStationingData`
+- `AnalyzeGeometryContinuity`
+- `ListNativeCommands`
+- `DescribeNativeCommand`
+- `ExecuteNativeCommand`
+- `ExecuteNativeCommandSequence`
 
-- **True railway geometry**: Circular arcs are real arcs, clothoids are numerically integrated Euler spirals. No spline substitution.
-- **Configurable rules**: ST-T1-A6 parameters in YAML. Change limits without touching code.
-- **Clean layer separation**: Domain → Engine → Validation → Application → UI
-- **Survey coordinate system**: x=easting, y=northing, azimuths from north CW
+#### Status implementacyjny
+- **W pełni zaimplementowane w executorze**: podstawowe tworzenie/edycja obiektów AutoCAD, query, zoom, alignment from polyline, TIN from point group, query alignment/surface/point groups, analiza ciągłości.
+- **Jawnie ograniczone / template-dependent**: profile, feature lines, alignment labels, profile labels, offset alignment. Zwracają kontrolowany błąd i alternatywę zamiast deklarować fałszywe wykonanie.
+- **Pełne sterowanie funkcjami Civil 3D**: gdy nie istnieje bezpieczny wrapper managed API, AI może użyć `ExecuteNativeCommand` / `ExecuteNativeCommandSequence`, aby sterować natywnymi komendami Civil 3D w sposób audytowalny i objęty polityką potwierdzeń.
 
-## Roadmap
+#### Macierz zgodności z promptem
+- **Ribbon + dockowalna paleta** — wdrożone.
+- **Prompt natural language + analiza kontekstu rysunku** — wdrożone.
+- **Structured JSON plan + walidacja bezpieczeństwa** — wdrożone.
+- **Dry run / execute / undo scope / rollback on failure** — wdrożone na poziomie orkiestratora i wykonawcy.
+- **Streaming API do warstwy integracyjnej** — wdrożone w kliencie Responses API; pełny incremental UX streaming w panelu można dalej rozbudować.
+- **Sterowanie wszystkimi funkcjami Civil 3D** — wdrożone przez połączenie managed tools + native command bridge z katalogiem komend i trybem uncataloged po jawnej zgodzie.
+- **Screenshot aktywnego widoku jako dodatkowy kontekst** — przewidziane architektonicznie, ale wymaga dołożenia dedykowanego adaptera Autodesk do capture view.
 
-The following features are architecturally prepared but not yet fully implemented:
+---
 
-1. **Advanced turnouts**: Full geometric modelling of switch components (data model ready)
-2. **Rail profiles**: Cross-section geometry
-3. **Clearance gauge**: Structure gauge checking
-4. **Drainage**: Track drainage design
-5. **Extended CAD/BIM export**: IFC, further DXF layers
-6. **Undo/redo**: Command pattern for edit operations
-7. **Multi-alignment coordination**: Cross-referencing between alignments
+## ETAP 2 — Implementacja plik po pliku
+
+### Core
+
+- `Contracts/ICadContextProvider.cs` — kontrakt dostarczający snapshot rysunku.
+- `Contracts/ICadToolExecutor.cs` — brama wykonawcza dla lokalnych operacji CAD.
+- `Contracts/ILogSink.cs`, `Contracts/ISecretStore.cs` — logi i bezpieczny storage sekretów.
+- `Models/DrawingContextSnapshot.cs` — kompaktowy model stanu rysunku, selection i Civil objects.
+- `Models/ExecutionModels.cs` — ustawienia, tryby wykonania, raporty i wynik narzędzia.
+- `Models/PlanningModels.cs` — request planowania, `OperationPlan`, `PlanStep`.
+- `Models/ToolDefinition.cs` — definicje narzędzi i JSON schema wejścia.
+- `OpenAI/ResponsesApiClient.cs` — integracja z Responses API, także SSE streaming.
+- `Planning/PlanJsonSchemaFactory.cs` — strict schema odpowiedzi modelu.
+- `Planning/PlanParser.cs` — parser JSON → `OperationPlan`.
+- `Safety/PlanValidator.cs` — walidacja bezpieczeństwa i kompletności planu.
+- `Runtime/AssistantOrchestrator.cs` — pipeline planowania i wykonania.
+- `Telemetry/LogEntry.cs` — ustrukturyzowany log planów i wywołań tools.
+- `Tools/ToolRegistry.cs` — pełny katalog narzędzi z JSON schema.
+- `Utilities/*` — infrastruktura MVVM (`ObservableObject`, `AsyncRelayCommand`).
+
+### Plugin / host Autodesk
+
+- `Host/CivilAiPluginEntry.cs` — entrypoint `IExtensionApplication`, bootstrap całego pluginu.
+- `Composition/PluginCompositionRoot.cs` — składanie usług, orkiestratora, UI i hosta palety.
+- `Commands/AICommands.cs` — komendy `CIVILAI_OPEN`, `CIVILAI_SETTINGS`.
+- `Ribbon/RibbonBuilder.cs` + `RibbonCommandHandler.cs` — karta `AI Civil` na Ribbonie.
+- `Services/PaletteHost.cs` — dockowalny `PaletteSet`.
+- `Services/SettingsStore.cs` — ustawienia per-user w `%LOCALAPPDATA%\CivilAI2026`.
+- `Services/WindowsCredentialManagerSecretStore.cs` — bezpieczne przechowywanie klucza API przez Windows DPAPI.
+- `Services/FileLogSink.cs` — JSONL logi lokalne.
+- `Services/AutodeskCadContextProvider.cs` — odczyt aktywnego dokumentu, warstw, selection, widocznych encji i Civil 3D summaries.
+- `Services/AutodeskCadToolExecutor.cs` — kontrolowane, transakcyjne wykonanie lokalnych narzędzi.
+- `UI/Controls/AssistantControl.xaml` — główny panel AI.
+- `UI/ViewModels/AssistantViewModel.cs` — logika MVVM: prompt, analiza, dry run, execute, log, status, walidacja.
+- `UI/Windows/SettingsWindow.xaml` — ustawienia OpenAI i polityk wykonania.
+
+### Testy
+
+- `PlanParserTests.cs` — poprawność parsera response planu.
+- `PlanValidatorTests.cs` — walidacja destrukcyjnych i nieznanych narzędzi.
+- `ToolRegistryTests.cs` — obecność wymaganych tools.
+- `EndToEndScenarioTests.cs` — przykładowy dry-run alignment workflow.
+
+---
+
+## ETAP 3 — Instrukcja uruchomienia, integracja z OpenAI, scenariusze
+
+### Wymagania środowiskowe
+
+- Windows 11 / Windows 10
+- Autodesk Civil 3D 2026
+- Visual Studio 2022 17.10+
+- .NET 8 SDK
+- Civil 3D 2026 / AutoCAD 2026 managed SDK assemblies
+
+### Konfiguracja build
+
+1. Ustaw zmienną środowiskową `C3D_2026_SDK` na katalog zawierający:
+   - `AcMgd.dll`
+   - `AcDbMgd.dll`
+   - `AcCoreMgd.dll`
+   - `AeccDbMgd.dll`
+   - `AeccPressurePipesMgd.dll`
+   - `AdWindows.dll`
+2. Otwórz `CivilAI.sln` w Visual Studio.
+3. Zbuduj `Release | Any CPU`.
+4. Skopiuj `CivilAI.Plugin.dll` do katalogu deploymentowego lub bezpośrednio `NETLOAD` w Civil 3D.
+
+Dodatkowo, bez uruchamiania .NET, możesz wykonać statyczną walidację całego rozwiązania poleceniem `python tests/validate_civilai_static.py`.
+
+### Deploy do Civil 3D 2026
+
+#### Opcja 1 — ręcznie
+1. Uruchom Civil 3D 2026.
+2. Wpisz `NETLOAD`.
+3. Wskaż `CivilAI.Plugin.dll`.
+4. Na Ribbonie pojawi się zakładka **AI Civil**.
+5. Kliknij **Open Assistant** lub użyj komendy `CIVILAI_OPEN`.
+
+#### Opcja 2 — AutoLoader package
+W kolejnym kroku rozwoju można dołożyć `PackageContents.xml`, aby dystrybuować plugin jako pakiet AutoLoader do `%ProgramData%\Autodesk\ApplicationPlugins`.
+
+### Integracja z OpenAI
+
+1. Otwórz **Settings** z Ribbon lub komendą `CIVILAI_SETTINGS`.
+2. Wprowadź **OpenAI API key**.
+3. Ustaw model główny i routingowy.
+4. Zapisz ustawienia.
+5. Klucz jest przechowywany lokalnie, per-user, z użyciem **Windows DPAPI**, nie jest hardcodowany i nie trafia do kodu ani plików konfiguracyjnych w postaci jawnej.
+
+### Zalecana konfiguracja modeli
+
+- **Primary model**: najnowszy stabilny model flagowy zgodny z Responses API, np. `gpt-5`.
+- **Routing / classification model**: mniejszy model klasy `gpt-5-mini` do intent classification lub szybkiego routingu.
+
+### Przykładowe scenariusze użytkownika
+
+#### AutoCAD workflows
+- `Narysuj oś jako polilinię przez wskazane punkty na warstwie AI_AXIS.`
+- `Dodaj tekst z nazwą profilu przy każdym końcu linii.`
+- `Przenieś wszystkie okręgi z warstwy TEMP na warstwę C-TOPO.`
+- `Przeanalizuj zaznaczenie i wskaż przerwy geometrii większe niż 2 mm.`
+
+#### Civil 3D workflows
+- `Utwórz alignment z zaznaczonej polilinii i nazwij go AI_Main_Axis.`
+- `Z grupy punktów EG utwórz powierzchnię TIN o nazwie EG_AI.`
+- `Pobierz geometrię alignmentu MAIN i pokaż stacjonowanie charakterystycznych punktów.`
+- `Znajdź konflikty ciągłości na zaznaczonych krzywych i przygotuj plan naprawy.`
+
+### Przebieg wykonania w UI
+
+1. Użytkownik wpisuje prompt.
+2. Klik **Dry Run** dla samego planu i preview.
+3. Panel pokaże:
+   - historię rozmowy,
+   - plan krok po kroku,
+   - walidację bezpieczeństwa,
+   - listę narzędzi,
+   - przewidywane obiekty docelowe.
+4. Klik **Execute** po weryfikacji.
+5. Plugin wykonuje plan w transakcji i raportuje zmienione obiekty.
+6. Cofnięcie zmian odbywa się logicznie jako jedna grupa `UNDO`.
+
+---
+
+## ETAP 4 — Lista ryzyk i dalsze rozszerzenia
+
+### Ryzyka techniczne
+
+1. **Różnice środowisk Civil 3D** — style, label sets i site workflows są silnie zależne od template projektu.
+2. **Warianty API Autodesk** — część operacji Civil 3D wymaga bardziej szczegółowego template-aware workflow niż da się bezpiecznie uogólnić.
+3. **Koszt i latencja LLM** — duże snapshoty rysunku należy agresywnie kompresować i filtrować.
+4. **Bezpieczeństwo operacji** — tryb auto-execute powinien być ograniczony polityką administratora lub profilem użytkownika.
+5. **Obsługa screenshotów** — screenshot widoku może poprawić rozumienie kontekstu, ale wykonanie nadal musi opierać się na API i identyfikowalnych obiektach.
+
+### Proponowane rozszerzenia
+
+1. **AutoLoader packaging** z `PackageContents.xml` i installerem MSI.
+2. **Streaming tokenów do UI** z live plan trace i incremental preview.
+3. **Template/style resolvers** dla alignment/profile labels oraz feature lines.
+4. **Advanced validators**: locked-layer policy, XREF policy, clash heuristics, tolerancje geometryczne per-standard.
+5. **Rozszerzany katalog natywnych komend** z gotowymi makrami firmowymi i profilem bezpieczeństwa per-komenda.
+5. **Screenshot capture service** dla kontekstu multimodalnego Responses API.
+6. **Telemetry adapter** do Application Insights / OTLP / SIEM.
+7. **Role-based safety policy**: projektant / checker / BIM manager.
+8. **Undo/rollback UX** z automatycznym snapshotem identyfikatorów obiektów i raportem zmian przed/po.
+
+---
+
+## Dodatkowe uwagi wdrożeniowe
+
+- Rozwiązanie zostało przygotowane tak, aby **Core** był rozwijany niezależnie od hosta Autodesk.
+- Jeśli konkretna operacja Civil 3D nie jest bezpiecznie automatyzowalna bez znajomości standardu biura projektowego, executor zwraca **kontrolowany failure** z alternatywą, zamiast udawać sukces.
+- To repozytorium zawiera kompletny foundation package dla produkcyjnego dodatku i jest gotowe do dalszego utwardzania pod konkretny standard deploymentu, template i polityki firmy.
